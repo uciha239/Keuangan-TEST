@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>Dashboard Keuangan</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--text:#1c2230;--muted:#6b7385;--line:#e4e7ee;--in:#12875a;--out:#d64545;--accent:#3b6df0}
+@media (prefers-color-scheme:dark){:root{--bg:#12151c;--card:#1b2030;--text:#e8ebf3;--muted:#9099ae;--line:#2a3147;--in:#3ecf8e;--out:#ff7676;--accent:#7a9bff}}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1100px;margin:0 auto;padding:20px 16px 48px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+h1{font-size:20px;margin:0}
+.tools{display:flex;gap:8px;flex-wrap:wrap}
+select,input,button.btn{background:var(--card);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font:inherit}
+button.btn{cursor:pointer}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card .lbl{color:var(--muted);font-size:13px}
+.card .val{font-size:24px;font-weight:700;margin-top:4px}
+.in{color:var(--in)}.out{color:var(--out)}
+.grid{display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-bottom:16px}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+.card h2{font-size:15px;margin:0 0 12px}
+.chartbox{position:relative;height:240px}
+.lists{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:900px){.lists{grid-template-columns:1fr}}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:600;font-size:12px}
+td.num,th.num{text-align:right}
+td.cat span{background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-size:12px}
+button.del{background:none;border:none;color:var(--muted);cursor:pointer;font-size:16px}
+button.del:hover{color:var(--out)}
+td.empty{color:var(--muted);text-align:center;padding:16px 0}
+#login{max-width:360px;margin:15vh auto 0;padding:0 16px}
+#login .card{display:flex;flex-direction:column;gap:12px}
+#login h1{text-align:center}
+#err{color:var(--out);font-size:14px;min-height:20px;margin:0}
+</style>
+</head>
+<body>
+
+<div id="login" hidden>
+  <form class="card" id="lf">
+    <h1>💰 Keuangan</h1>
+    <input type="password" id="pw" placeholder="Password" autocomplete="current-password" required>
+    <button class="btn primary" type="submit">Masuk</button>
+    <p id="err"></p>
+  </form>
+</div>
+
+<div class="wrap" id="app" hidden>
+  <header>
+    <h1>💰 Dashboard Keuangan</h1>
+    <div class="tools">
+      <select id="bulan"></select>
+      <button class="btn" id="csv" type="button">⬇ CSV</button>
+      <button class="btn" id="keluar" type="button">Keluar</button>
+    </div>
+  </header>
+
+  <div class="cards">
+    <div class="card"><div class="lbl">Uang masuk</div><div class="val in" id="tm">-</div></div>
+    <div class="card"><div class="lbl">Uang keluar</div><div class="val out" id="tk">-</div></div>
+    <div class="card"><div class="lbl">Selisih</div><div class="val" id="ts">-</div></div>
+  </div>
+
+  <div class="grid">
+    <div class="card"><h2>Pengeluaran per kategori</h2><div class="chartbox"><canvas id="c1"></canvas></div></div>
+    <div class="card"><h2>Harian</h2><div class="chartbox"><canvas id="c2"></canvas></div></div>
+  </div>
+
+  <div class="lists">
+    <div class="card"><h2>Uang masuk</h2><div class="scroll"><table id="tbl-masuk"></table></div></div>
+    <div class="card"><h2>Uang keluar</h2><div class="scroll"><table id="tbl-keluar"></table></div></div>
+  </div>
+</div>
+
+<script>
+const KEY = 'keuangan_token';
+const fmt = n => 'Rp' + new Intl.NumberFormat('id-ID').format(n);
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const PALET = ['#3b6df0','#f0883b','#3bb88a','#d64545','#9b59d0','#e0b82e','#2ea6c9','#8a94a8'];
+const charts = {};
+let token = '';
+let dataTerakhir = null;
+
+try { token = localStorage.getItem(KEY) || ''; } catch (e) {}
+const simpanToken = t => { token = t; try { t ? localStorage.setItem(KEY, t) : localStorage.removeItem(KEY); } catch (e) {} };
+
+function tampil(login){
+  document.getElementById('login').hidden = !login;
+  document.getElementById('app').hidden = login;
+}
+
+function keluarAkun(){ simpanToken(''); tampil(true); }
+
+async function api(path, opts = {}){
+  const r = await fetch(path, { ...opts, headers: { 'content-type': 'application/json', 'authorization': 'Bearer ' + token } });
+  if (r.status === 401) { keluarAkun(); throw new Error('belum login'); }
+  return r.json();
+}
+
+function td(text, cls){ const e = document.createElement('td'); e.textContent = text; if (cls) e.className = cls; return e; }
+
+function isiTabel(id, rows){
+  const t = document.getElementById(id);
+  t.replaceChildren();
+  if (!rows.length){ const tr = document.createElement('tr'); const c = td('Belum ada data', 'empty'); c.colSpan = 5; tr.appendChild(c); t.appendChild(tr); return; }
+  const head = document.createElement('tr');
+  ['Waktu','Catatan','Kategori','Nominal',''].forEach((h, i) => { const th = document.createElement('th'); th.textContent = h; if (i === 3) th.className = 'num'; head.appendChild(th); });
+  t.appendChild(head);
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.appendChild(td(new Date(r.waktu).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })));
+    tr.appendChild(td(r.catatan));
+    const c = document.createElement('td'); c.className = 'cat'; const s = document.createElement('span'); s.textContent = r.kategori; c.appendChild(s); tr.appendChild(c);
+    tr.appendChild(td(fmt(r.nominal), 'num'));
+    const d = document.createElement('td'); const b = document.createElement('button'); b.className = 'del'; b.title = 'Hapus'; b.textContent = '🗑';
+    b.onclick = async () => {
+      if (!confirm('Hapus "' + r.catatan + ' ' + fmt(r.nominal) + '"?')) return;
+      await api('/api/hapus', { method: 'POST', body: JSON.stringify({ id: r.id }) });
+      load();
+    };
+    d.appendChild(b); tr.appendChild(d);
+    t.appendChild(tr);
+  });
+}
+
+function gambar(id, cfg){ if (charts[id]) charts[id].destroy(); charts[id] = new Chart(document.getElementById(id), cfg); }
+
+function render(d){
+  dataTerakhir = d;
+  const sel = document.getElementById('bulan');
+  sel.replaceChildren();
+  d.bulan_tersedia.forEach(b => { const o = document.createElement('option'); o.value = b; o.textContent = new Date(b + '-01').toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }); sel.appendChild(o); });
+  sel.value = d.bulan;
+
+  document.getElementById('tm').textContent = fmt(d.total_masuk);
+  document.getElementById('tk').textContent = fmt(d.total_keluar);
+  const selisih = d.total_masuk - d.total_keluar;
+  const ts = document.getElementById('ts');
+  ts.textContent = (selisih < 0 ? '-' : '') + fmt(Math.abs(selisih));
+  ts.className = 'val ' + (selisih < 0 ? 'out' : 'in');
+
+  const text = css('--muted'), line = css('--line');
+  const kat = Object.keys(d.per_kategori);
+  gambar('c1', { type: 'doughnut', data: { labels: kat, datasets: [{ data: kat.map(k => d.per_kategori[k]), backgroundColor: PALET, borderWidth: 0 }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { position: 'bottom', labels: { color: text } }, tooltip: { callbacks: { label: c => c.label + ': ' + fmt(c.parsed) } } } } });
+  gambar('c2', { type: 'bar', data: { labels: d.harian.map(h => h.tgl), datasets: [
+      { label: 'Masuk', data: d.harian.map(h => h.masuk), backgroundColor: css('--in') },
+      { label: 'Keluar', data: d.harian.map(h => h.keluar), backgroundColor: css('--out') }] },
+    options: { maintainAspectRatio: false, scales: { x: { ticks: { color: text }, grid: { color: line } }, y: { ticks: { color: text, callback: v => fmt(v) }, grid: { color: line } } },
+      plugins: { legend: { labels: { color: text } }, tooltip: { callbacks: { label: c => c.dataset.label + ': ' + fmt(c.parsed.y) } } } } });
+
+  isiTabel('tbl-masuk', d.masuk);
+  isiTabel('tbl-keluar', d.keluar);
+}
+
+async function load(){
+  const b = document.getElementById('bulan').value;
+  render(await api('/api/data' + (b ? '?bulan=' + encodeURIComponent(b) : '')));
+}
+
+function unduhCsv(){
+  if (!dataTerakhir) return;
+  const esc = v => '"' + String(v).replace(/"/g, '""') + '"';
+  const rows = [...dataTerakhir.masuk, ...dataTerakhir.keluar].sort((a, b) => a.waktu.localeCompare(b.waktu));
+  const isi = '\uFEFF' + ['Waktu;Tipe;Nominal;Kategori;Catatan', ...rows.map(r => [r.waktu, r.tipe, r.nominal, r.kategori, r.catatan].map(esc).join(';'))].join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([isi], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'keuangan_' + dataTerakhir.bulan + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById('lf').addEventListener('submit', async e => {
+  e.preventDefault();
+  const err = document.getElementById('err');
+  err.textContent = '';
+  try {
+    const r = await fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: document.getElementById('pw').value }) });
+    const j = await r.json();
+    if (!r.ok) { err.textContent = j.error || 'Gagal masuk'; return; }
+    simpanToken(j.token);
+    document.getElementById('pw').value = '';
+    tampil(false);
+    load();
+  } catch (x) { err.textContent = 'Tidak bisa terhubung ke server'; }
+});
+document.getElementById('bulan').addEventListener('change', load);
+document.getElementById('csv').addEventListener('click', unduhCsv);
+document.getElementById('keluar').addEventListener('click', keluarAkun);
+
+if (token) { tampil(false); load().catch(() => {}); } else { tampil(true); }
+setInterval(() => { if (token && !document.hidden) load().catch(() => {}); }, 30000);
+</script>
+</body>
+</html>
